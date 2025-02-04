@@ -309,13 +309,16 @@ def get_s3client(config_file=None, from_path=False):
     )
 
     if config_file is None:
-        s3_client = boto3.client(
-        service_name="s3",
-        endpoint_url=f'{COSCINE_URL}:{COSCINE_PORT}',
-        aws_access_key_id=st.secrets['s3_access_key'],
-        aws_secret_access_key=st.secrets['s3_access_secret']
-        )
-        return s3_client, st.secrets['s3_bucket'], 'S3_NFDI_DEMO_01'
+        try:
+            s3_client = boto3.client(
+            service_name="s3",
+            endpoint_url=f'{COSCINE_URL}:{COSCINE_PORT}',
+            aws_access_key_id=st.secrets['s3_access_key'],
+            aws_secret_access_key=st.secrets['s3_access_secret']
+            )
+            return s3_client, st.secrets['s3_bucket'], 'S3_NFDI_DEMO_01'
+        except FileNotFoundError:
+            return None, "", ""
     elif from_path:
         # Open file to access content
 
