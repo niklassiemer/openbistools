@@ -64,14 +64,14 @@ ALLOWED_OBJECT_TYPES = [
     "MICRO_MECH_EXP",
 ]
 
-warnings.filterwarnings(action='ignore', category=FutureWarning)
+warnings.filterwarnings(action="ignore", category=FutureWarning)
 
 
 ## ============================================================================
 ## Helper functions
 ## ============================================================================
 
-def init_session_state(temp_dir: str):
+def init_session_state(temp_dir: str, demo_mode=False):
     # Initialize Streamlit Session State
     SESSION_DEFAULTS = {
         "oBis": None,
@@ -79,7 +79,7 @@ def init_session_state(temp_dir: str):
         "openbis_username": "",
         "openbis_upload_allowed": False,
         "s3_upload_allowed": False,
-        # 'obis_token': '',
+        # "obis_token": "",
         "experiments": {},
         "experiment_name_list": [],
         "obis_dmscode": "",
@@ -103,6 +103,7 @@ def init_session_state(temp_dir: str):
 
     st.session_state.temp_dir = temp_dir
     st.session_state.max_size = st_config.get_option("server.maxUploadSize") # Mb
+    st.session_state.demo_mode = demo_mode
 
 
 def openbis_login():
@@ -171,7 +172,7 @@ def openbis_login():
 def find_relevant_locations(username, include_samples=True):
     """Fetches all ELN entries the user can link to."""
 
-    # Add spaces corresponding to research projects (+ user's personal space)
+    # Add spaces corresponding to research projects (+ user"s personal space)
 
     space_list = [
         username.upper(),
@@ -293,7 +294,7 @@ def check_openbis_login_success():
 ##
 
 
-def get_s3client(config_file, from_path=False):
+def get_s3client(config_file=None, from_path=False):
     """Read in the config file and parse the configuration settings.
 
     Args:
@@ -307,7 +308,18 @@ def get_s3client(config_file, from_path=False):
         },
     )
 
-    if from_path:
+    if config_file is None:
+        try:
+            s3_client = boto3.client(
+            service_name="s3",
+            endpoint_url=f"{COSCINE_URL}:{COSCINE_PORT}",
+            aws_access_key_id=st.secrets["s3_access_key"],
+            aws_secret_access_key=st.secrets["s3_access_secret"]
+            )
+            return s3_client, st.secrets["s3_bucket"], "S3_NFDI_DEMO_01"
+        except FileNotFoundError:
+            return None, "", ""
+    elif from_path:
         # Open file to access content
 
         with open(config_file, "r") as fh:
@@ -371,18 +383,25 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--temp_dir", type=str, required=False, default="./tmp",
-        help='Path to where the data will be staged (anbd later deleted)'
+        help="Path to where the data will be staged (and later deleted)"
+    )
+    parser.add_argument(
+        "--demo_mode", action="store_true", help="Switch to demo_mode"
     )
     args = parser.parse_args()
-    init_session_state(temp_dir=args.temp_dir)
+        
+    demo_mode = args.demo_mode
+    if not demo_mode:
+        demo_mode = os.environ.get("DEMO_MODE", "False").lower() == 'true'
+    init_session_state(temp_dir=args.temp_dir, demo_mode=demo_mode)
 
     # Page Config
-
     st.set_page_config(
         page_title="Web Tool to link and upload data to openBIS",
         page_icon="media/SFB1394_icon.jpg",
         layout="wide",
     )
+    st.toast("Please set environment variable `DEMO_MODE` to `True` if you want to use the app in demo mode")
 
     # Prompt user to choose next page after succesful login
 
@@ -457,6 +476,14 @@ def main():
 
     # Prompt user to upload credentials needed for upload to Coscine
 
+    if st.session_state.demo_mode and st.session_state.logged_in:
+        if not st.session_state.s3_client:
+            client, bucket, dmscode = get_s3client()
+            st.session_state.s3_client = client
+            st.session_state.s3_bucket_name = bucket
+            st.session_state.obis_dmscode = dmscode
+        response = check_s3()
+        st.session_state.setup_done = True
     if st.session_state.is_crc and not st.session_state.setup_done:
         with placeholder2.form("Form_S3_credentials"):
             st.write("Enter S3 storage credentials (to upload to Coscine)")
