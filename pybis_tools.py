@@ -400,7 +400,8 @@ def register_file(
 
         # openBIS permID of the newly linked dataset
 
-        permid_linked_dataset = oBis.get_dataset(response[0]["permId"])
+        linked_dataset = oBis.get_dataset(response[0]["permId"])
+        permid_linked_dataset = linked_dataset.permId
         logging.debug("New openBIS permID %s" % permid_linked_dataset)
     except Exception as e:
         logging.error("Something went wrong in POST command: %s" % e)

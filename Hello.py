@@ -311,10 +311,15 @@ def get_s3client(config_file=None, from_path=False):
     if config_file is None:
         try:
             s3_client = boto3.client(
-            service_name="s3",
-            endpoint_url=f"{COSCINE_URL}:{COSCINE_PORT}",
-            aws_access_key_id=st.secrets["s3_access_key"],
-            aws_secret_access_key=st.secrets["s3_access_secret"]
+                service_name="s3",
+                endpoint_url=f"{COSCINE_URL}:{COSCINE_PORT}",
+                aws_access_key_id=st.secrets["s3_access_key"],
+                aws_secret_access_key=st.secrets["s3_access_secret"],
+                config=boto3.session.Config(
+                    signature_version="s3v4",
+                    connect_timeout=5,
+                    read_timeout=10,
+                ),
             )
             return s3_client, st.secrets["s3_bucket"], "S3_NFDI_DEMO_01"
         except FileNotFoundError:
@@ -392,7 +397,10 @@ def main():
         
     demo_mode = args.demo_mode
     if not demo_mode:
-        demo_mode = os.environ.get("DEMO_MODE", "False").lower() == 'true'
+        if "DEMO_MODE" in st.secrets:
+            demo_mode = st.secrets["DEMO_MODE"]
+        else:
+            demo_mode = os.environ.get("DEMO_MODE", "False").lower() == 'true'
     init_session_state(temp_dir=args.temp_dir, demo_mode=demo_mode)
 
     # Page Config
