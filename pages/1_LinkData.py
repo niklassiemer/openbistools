@@ -711,7 +711,7 @@ with st.form("Form_Link"):
                     )
                     url = st.session_state.s3_client.generate_presigned_url(
                         "get_object",
-                        Params={"Bucket": st.session_state.bucket, "Key": os.path.basename(file_name)},
+                        Params={"Bucket": st.session_state.s3_bucket_name, "Key": os.path.basename(file_name)},
                         ExpiresIn=604800,
                     )
                     ds = st.session_state.oBis.get_dataset(permid)
