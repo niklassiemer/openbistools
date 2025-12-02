@@ -3,7 +3,7 @@
 
 
 """
-Copyright [2024] [Ulrich Kerzel, Khalil Rejiba]
+Copyright [2025] [Ulrich Kerzel, Khalil Rejiba]
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-Multi-page streamlit app used to upload/download data
+Multi-page streamlit app used to augment the functionality of openBIS ELN-LIMS
 
 """
 import warnings
@@ -35,34 +35,40 @@ from botocore.errorfactory import ClientError
 from botocore.client import Config
 from pybis_tools import check_role, get_full_identifier
 
+
 OPENBIS_URL = "https://openbis.imm.rwth-aachen.de/openbis/webapp/eln-lims/:8443"
-COSCINE_URL = "https://global.datastorage.nrw"
-COSCINE_PORT = "443"
+COSCINE_URL = "https://coscine-s3-01.s3.fds.rwth-aachen.de:9021"  # RWTH-RDS-S3
+# COSCINE_URL = "https://coscine-nrw-s3-01.s3.fds.nrw:9021" # NRW-RDS-S3
+
 
 # Define DataSet types to ignore in this tool
+
 
 FORBIDDEN_DATASET_TYPES = [
     "ELN_PREVIEW",  # From OpenBIS
     "SEQ_FILE",  # From OpenBIS
     "MICROSCOPY_IMG_CONTAINER",  # From OpenBIS
-    "SE",  # Custom but no longer used
 ]
 
-
 # Define Object types to include when uploading using this tool
+
 
 ALLOWED_OBJECT_TYPES = [
     "EXPERIMENTAL_STEP",
     "SIMULATION_EXP",
     "SIMULATION_ARTEFACT",
+    "INTERATOMIC_POTENTIAL",
+    "PSEUDOPOTENTIAL",
     "SEM_EXP",
     "SAMPLE",
-    "EBSD_SIM",
     "TENSILE_EXPERIMENT",
     "TENSILE_TEST_PROTOCOL",
     "CUTTING_PROTOCOL",
     "FIB_MILLING_PROTOCOL",
     "MICRO_MECH_EXP",
+    "THIN_FILM_SYNTHESIS",
+    "CALPHAD_DATABASE",
+    "PHASE_DIAGRAM",
 ]
 
 warnings.filterwarnings(action="ignore", category=FutureWarning)
@@ -72,16 +78,20 @@ warnings.filterwarnings(action="ignore", category=FutureWarning)
 ## Helper functions
 ## ============================================================================
 
-def init_session_state(temp_dir: str, demo_mode=False):
+
+def init_session_state(temp_dir: str):
     # Initialize Streamlit Session State
+
     SESSION_DEFAULTS = {
         "oBis": None,
         "ds_type_set": set(),
         "openbis_username": "",
+        "openbis_password": "",
+        "openbis_token": "",
         "openbis_upload_allowed": False,
         "s3_upload_allowed": False,
-        # "obis_token": "",
         "experiments": {},
+        "experiments_with_data": {},
         "experiment_name_list": [],
         "obis_dmscode": "",
         "logged_in": False,
@@ -94,109 +104,86 @@ def init_session_state(temp_dir: str, demo_mode=False):
         "s3_bucket_name": "",
         "s3_upload_ok": False,
         "s3_download_ok": False,
-        "is_crc": False,
         "temp_dir": "./tmp",
+        "options": None,
+        "bucket_fill_levels": {},
     }
 
     for k, v in SESSION_DEFAULTS.items():
         if k not in st.session_state:
             setattr(st.session_state, k, v)
-
     st.session_state.temp_dir = temp_dir
-    st.session_state.max_size = st_config.get_option("server.maxUploadSize") # Mb
-    st.session_state.demo_mode = demo_mode
+    st.session_state.max_size = st_config.get_option("server.maxUploadSize")  # Mb
 
 
-def openbis_login():
+def openbis_login(openbis_url):
     """
     Performs startup tasks (login to OpenBIS and identification of roles and permissions).
     """
 
     username = None
     try:
-        st.session_state.oBis = Openbis(OPENBIS_URL, verify_certificates=True)
-        st.session_state.oBis.set_token(
-            st.session_state.obis_token,
-            save_token=True,
-        )
+        st.session_state.oBis = Openbis(openbis_url, verify_certificates=True)
+        if len(st.session_state.openbis_token):
+            st.session_state.oBis.set_token(
+                st.session_state.openbis_token,
+                save_token=True,
+            )
+        else:
+            st.session_state.oBis.login(
+                username=st.session_state.openbis_username.strip(),
+                password=st.session_state.openbis_password.strip(),
+            )
         username = st.session_state.oBis._get_username()
+
+        # Check if user is allowed to upload to openBIS directly
+        # .i.e. all users who have an OBSERVER role in the space IMM
+        st.session_state.openbis_upload_allowed = check_role(
+            oBis=st.session_state.oBis,
+            username=username,
+        )
+
+        # Check if user is allowed to upload data to Coscine
+        allowed_users = (
+            st.session_state.oBis.get_group("COSCINE_UPLOAD").get_members().df
+        )
+        allowed_users = allowed_users.permId.to_list()
+        st.session_state.s3_upload_allowed = username in allowed_users
 
         st.session_state.logged_in = True
         st.session_state.openbis_username = username
+        st.session_state.openbis_password = ""
+        st.session_state.openbis_token = st.session_state.oBis.token
+
     except Exception as e:
-        st.error(f"Cannot connect to openBIS: {e}", icon="🔥")
+        st.error(f"Cannot connect to openBIS {openbis_url}: {e}", icon="🔥")
         st.snow()
         st.stop()
-    # Check if user is allowed to upload to openBIS directly
-    # .i.e. all users who have an OBSERVER role in the space IMM
-
-    st.session_state.openbis_upload_allowed = check_role(
-        oBis=st.session_state.oBis,
-        username=st.session_state.openbis_username,
-    )
-
-    # Check if user is allowed to upload data to Coscine
-    # .i.e. all users who have a USER role (or higher) in one of the projects
-
-    PUBLIC_CRC_PROJECTS = ["CRC1394_DEMO", "CRC1394_COSCINE"]
-    person = st.session_state.oBis.get_person(username)
-    roles = person.get_roles().df  # Roles excluding inherited roles from group
-
-    # Identify roles inherited from group
-
-    roles_group = st.session_state.oBis.get_groups().df
-    roles_group = roles_group[roles_group.users.str.contains(username)]
-    roles_group = roles_group.tail(1)
-
-    # Add roles inherited from group
-
-    if len(roles_group):
-        group_code = roles_group.code.item()
-        group = st.session_state.oBis.get_group(group_code)
-        roles_group = group.get_roles().df
-        roles = pd.concat([roles, roles_group], axis=0)
-    # CRC Membership test (We exclude OBSERVER roles)
-
-    is_crc = False
-    roles = roles[roles.role.isin(["USER", "POWER_USER", "ADMIN"])]
-    for project_code in roles.project.unique():
-        if (
-            project_code.startswith("CRC1394_")
-            and project_code not in PUBLIC_CRC_PROJECTS
-        ):
-            is_crc = True
-            break
-    st.session_state.is_crc = is_crc
-    st.session_state.s3_upload_allowed = is_crc
 
 
 def find_relevant_locations(username, include_samples=True):
     """Fetches all ELN entries the user can link to."""
 
-    # Add spaces corresponding to research projects (+ user"s personal space)
+    # Add spaces corresponding to research projects (+ user's personal space)
 
     space_list = [
         username.upper(),
         "CRC1394",
         "TRR188",
-        "CRC761",
-        "CSC",
-        "IMM_SPACE",
-        "IMM_NANOMECHANICS",
     ]
     # Add spaces in inventory (DEPRECATED)
 
-    space_list += [
-        "EXPERIMENTS",
-        "SAMPLES",
-        "METHODS",
-        "SIMULATION",
-    ]
+    # space_list += [
+    #     "EXPERIMENTS",
+    #     "SAMPLES",
+    #     "METHODS",
+    #     "SIMULATION",
+    # ]
 
     # We restrict which objects the user can upload to using this tool
 
     allowed_object_types = ALLOWED_OBJECT_TYPES
-    
+
     if not include_samples and "SAMPLE" in allowed_object_types:
         allowed_object_types.remove("SAMPLE")
     spaces = st.session_state.oBis.get_spaces()
@@ -210,31 +197,62 @@ def find_relevant_locations(username, include_samples=True):
 
     st.session_state.experiments = {}
 
-    for space_id, space_name in enumerate(space_list, 1):
-        space = st.session_state.oBis.get_space(space_name)
-        experiments = space.get_experiments()
+    experiments = st.session_state.oBis.get_experiments(
+        attrs=["code", "project.code"], props=["$NAME", "NUM_DATASETS"]
+    ).df
+    experiments["space"] = experiments.identifier.str.split("/").str[1]
+    experiments = experiments[experiments.space.isin(space_list)]
+    experiments = (
+        experiments.sort_values("space")
+        .rename(columns={"project.code": "project"})
+        .reset_index()
+    )
 
-        progress_bar = st.progress(0, text=f"{space_id}/{len(space_list)}")
+    total = len(experiments)
 
-        for i, exp in enumerate(experiments, 1):
-            progress_bar.progress(i / len(experiments), text=f"{space_id}/{len(space_list)}")
+    progress_bar = st.progress(0)
 
-            # We know this is either an Experiment or a Collection
+    for i, exp in experiments.iterrows():
+        permid = exp["permId"]
+        identifier = exp["identifier"]
+        name = exp["$NAME"]
+        name = name if name not in (None, "") else exp["code"]
+        space = exp["space"]
+        project = exp["project"]
+        progress_bar.progress(i / total, text=f"{space} - {i+1}/{total}")
+        list_item = f"{space}{sep}{project}{sep}{name} ({permid})"
+        st.session_state.experiments[list_item] = identifier
+        if exp["NUM_DATASETS"]:
+            try:
+                int(exp["NUM_DATASETS"])
+                st.session_state.experiments_with_data[list_item] = identifier
+            except ValueError:
+                # dynamic property pending evaluation - str
+                pass
 
-            name = exp.p.get("$name") if exp.p.get("$name") is not None else exp.code
-            list_item = exp.project.code + sep + name + " (%s) " % exp.permId
-            list_item = space_name + sep + list_item
-            
-            st.session_state.experiments[list_item] = exp.identifier
+        exp_objects = st.session_state.oBis.get_objects(
+            experiment=identifier,
+            attrs=["code"],
+            props=["$NAME", "NUM_DATASETS"],
+        ).df
+        exp_objects = exp_objects[
+            exp_objects.type.isin(allowed_object_types)
+        ].reset_index()
+        for j, exp_obj in exp_objects.iterrows():
+            exp_dict = exp.to_dict()
+            obj_dict = exp_obj.to_dict()
+            identifier, list_item = get_full_identifier(exp_dict, obj_dict, sep, True)
+            st.session_state.experiments[list_item] = identifier
+            if exp_obj["NUM_DATASETS"]:
+                try:
+                    int(exp_obj["NUM_DATASETS"])
+                    st.session_state.experiments_with_data[list_item] = identifier
+                except ValueError:
+                    # dynamic property pending evaluation - str
+                    pass
 
-            exp_objects = exp.get_objects()
-            for exp_obj in exp_objects:
-                if exp_obj.type in allowed_object_types:
-                    identifier, list_item = get_full_identifier(exp, exp_obj, sep, True)
-                    list_item = space_name + sep + list_item
-                    st.session_state.experiments[list_item] = identifier
+    progress_bar.empty()
 
-        progress_bar.empty()
     exp_list = sorted(st.session_state.experiments.keys())
     exp_list = list(exp_list)
     st.session_state.experiment_name_list = exp_list
@@ -257,27 +275,48 @@ def configure_download_from_coscine():
     CFG_EXP_LIST = [
         "/CRC1394/CRC1394_COSCINE/CRC1394_COSCINE_CONFIG",
         "/TRR188/TRR188_COSCINE/TRR188_COSCINE_CONFIG",
+        "/IMM_SPACE/IMM_COSCINE/FUNBLOCKS_COSCINE_CONFIG",
+        "/IMM_SPACE/IMM_COSCINE/SILA_COSCINE_CONFIG",
+        "/PUBLICATIONS/PUBLIC_REPOSITORIES/PUBLICATIONS_COLLECTION",
     ]
-    
+
     st.session_state.s3_download_ok = False
 
+    experiments = st.session_state.oBis.get_experiments().df.identifier.to_list()
+
     for config_expertiment in CFG_EXP_LIST:
-        if config_expertiment in st.session_state.experiments.values():
+        if config_expertiment in experiments:
             st.session_state.s3_download_ok = True
             datasets = st.session_state.oBis.get_datasets(
                 experiment=config_expertiment,
             )
             for ds in datasets:
                 fname = ds.file_list[0].split("/")[-1]
-                ds.download(
-                    destination=st.session_state.temp_dir,
-                    create_default_folders=False,
-                )
-                local_path = st.session_state.temp_dir + "/" + fname
-
-                s3client, bn, dmscode = get_s3client(local_path, True)
-                st.session_state.s3_clients[dmscode] = s3client
-                st.session_state.s3_bucket_names[dmscode] = bn
+                if fname.endswith((".cfg", ".csv")):
+                    ds.download(
+                        destination=st.session_state.temp_dir,
+                        create_default_folders=False,
+                    )
+                    local_path = st.session_state.temp_dir + "/" + fname
+                    if fname.endswith(".cfg"):
+                        s3_client, bucket_name, dms_code = get_s3client(
+                            local_path, True
+                        )
+                        st.session_state.s3_clients[dms_code] = s3_client
+                        st.session_state.s3_bucket_names[dms_code] = bucket_name
+                    elif fname.endswith(".csv"):
+                        levels_df = pd.read_csv(local_path)
+                        levels_df["name"] = levels_df["name"] + levels_df[
+                            "used_gb"
+                        ].apply(lambda x: f" ({x:} Gb)")
+                        levels_df.set_index("name", inplace=True)
+                        st.session_state.bucket_fill_levels = levels_df[
+                            "used_percent"
+                        ].to_dict()
+                    else:
+                        raise NotImplementedError(
+                            f"Unexpected file {ds.permId}: {fname}"
+                        )
 
 
 def check_openbis_login_success():
@@ -295,38 +334,26 @@ def check_openbis_login_success():
 ##
 
 
-def get_s3client(config_file=None, from_path=False):
+def get_s3client(config_file, from_path=False):
     """Read in the config file and parse the configuration settings.
 
     Args:
         config (opened file): file-like object
     """
+    from urllib.parse import urlparse, urlunparse
+
+    parsed_url = urlparse(COSCINE_URL)
     parser = ConfigParser(
         allow_no_value=True,
         defaults={
-            "s3_endpoint_url": COSCINE_URL,
-            "s3_endpoint_port": COSCINE_PORT,
+            "s3_endpoint_url": urlunparse(
+                parsed_url._replace(netloc=parsed_url.hostname)
+            ),
+            "s3_endpoint_port": parsed_url.port,
         },
     )
 
-    if config_file is None:
-        try:
-            s3_client = boto3.client(
-                service_name="s3",
-                endpoint_url=f"{COSCINE_URL}:{COSCINE_PORT}",
-                aws_access_key_id=st.secrets["s3_access_key"],
-                aws_secret_access_key=st.secrets["s3_access_secret"],
-                config=Config(
-                    signature_version="s3v4",
-                    s3={"addressing_style": "virtual"},
-                    # connect_timeout=5,
-                    # read_timeout=10,
-                ),
-            )
-            return s3_client, st.secrets["s3_bucket"], "S3_NFDI_DEMO_01"
-        except FileNotFoundError:
-            return None, "", ""
-    elif from_path:
+    if from_path:
         # Open file to access content
 
         with open(config_file, "r") as fh:
@@ -347,22 +374,23 @@ def get_s3client(config_file=None, from_path=False):
     obis_dmscode = parser.get("openBIS", "dms_code")
 
     s3_url = s3_endpoint_url + ":" + str(s3_endpoint_port)
+    if "datastorage.nrw" in s3_endpoint_url.lower():
+        config = Config(signature_version="s3v4", s3={"addressing_style": "virtual"})
+    else:
+        config = Config(signature_version="s3v4")
 
     s3_client = boto3.client(
         service_name="s3",
         endpoint_url=s3_url,
-        config=Config(
-            signature_version="s3v4",
-            s3={"addressing_style": "virtual"}
-        ),
         aws_access_key_id=s3_key,
         aws_secret_access_key=s3_secret,
+        config=config,
     )
 
     return s3_client, s3_bucket_name, obis_dmscode
 
 
-def check_s3():
+def check_read_s3():
     try:
         response = st.session_state.s3_client.list_objects_v2(
             Bucket=st.session_state.s3_bucket_name
@@ -381,7 +409,8 @@ def check_s3():
     else:
         if response["Name"] == st.session_state.s3_bucket_name:
             st.session_state.s3_upload_ok = True
-            return True
+
+
 def check_write_s3():
     object_key = "test-file.txt"
     data = "This is a test."
@@ -412,35 +441,43 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--temp_dir", type=str, required=False, default="./tmp",
-        help="Path to where the data will be staged (and later deleted)"
+        "--temp_dir",
+        type=str,
+        required=False,
+        default="./tmp",
+        help="Path to where the data will be staged (anbd later deleted)",
     )
     parser.add_argument(
-        "--demo_mode", action="store_true", help="Switch to demo_mode"
+        "--openbis_url", type=str, required=False, help="openBIS endpoint"
+    )
+    parser.add_argument(
+        "--coscine_url", type=str, required=False, help="Default Coscine endpoint"
     )
     args = parser.parse_args()
-        
-    demo_mode = args.demo_mode
-    if not demo_mode:
-        if "DEMO_MODE" in st.secrets:
-            demo_mode = st.secrets["DEMO_MODE"]
-        else:
-            demo_mode = os.environ.get("DEMO_MODE", "False").lower() == 'true'
-    init_session_state(temp_dir=args.temp_dir, demo_mode=demo_mode)
+    init_session_state(temp_dir=args.temp_dir)
 
+    # Assign which openBIS instance you want to communicate with
+
+    openbis_url = args.openbis_url
+    if openbis_url is None:
+        try:
+            openbis_url = os.environ["OPENBIS_ENDPOINT"]
+        except KeyError:
+            openbis_url = OPENBIS_URL
     # Page Config
+
     st.set_page_config(
-        page_title="Web Tool to link and upload data to openBIS",
+        page_title="openBIS Companion App - CRC1394",
         page_icon="media/SFB1394_icon.jpg",
         layout="wide",
     )
-    st.toast("Please set environment variable `DEMO_MODE` to `True` if you want to use the app in demo mode")
 
     # Prompt user to choose next page after succesful login
 
     st.sidebar.success("Choose what to do  \nafter login is successful")
 
     # Clean up temporary directory
+
     if os.path.isdir(st.session_state.temp_dir):
         for file in os.scandir(st.session_state.temp_dir):
             if file.is_file():
@@ -449,7 +486,7 @@ def main():
         os.makedirs(st.session_state.temp_dir)
     # Display Welcome section
 
-    st.title("SFB/CRC 1394 openBIS Linked Files")
+    st.title("SFB/CRC 1394 openBIS Companion App")
     st.image("media/SFB1394_TitleImage_Cropped.png")
     st.markdown(
         """
@@ -468,18 +505,31 @@ def main():
 
     # Prompt user to login to opemBIS
 
-    with placeholder1.form("Form_oBis_Login"):
-        st.write("Enter openBIS session token")
-        token = st.text_input(
-            "Enter your openBIS session token",
-            label_visibility="collapsed",
-            placeholder="Go to /Utilities /User Profile",
+    with placeholder1.form("form-openbis-login"):
+        st.write(
+            "You can use the session token from the openBIS ELN-LIMS GUI to login to the companion app or your username and password."
         )
+        col1, col2, col3 = st.columns([0.5, 0.25, 0.25])
+        with col1:
+            token = st.text_input(
+                "Enter your openBIS session token",
+                placeholder="Go to /Utilities /User Profile",
+            )
+        with col2:
+            username = st.text_input(
+                "Enter your openBIS username",
+            )
+        with col3:
+            password = st.text_input(
+                "Enter your openBIS password",
+                type="password",
+            )
         include_samples = st.toggle(
             "Are you uploading data to samples?",
-            help="Only relevant for users uploading simulation data",
+            help="Only relevant for users uploading simulation data. Experimental data should be uploaded to experiments.",
         )
-        st.session_state.include_samples = include_samples
+        if not st.session_state.setup_done:
+            st.session_state.include_samples = include_samples
         if include_samples:
             spinner_message = "Trying to locate your samples and experiments"
         else:
@@ -488,54 +538,71 @@ def main():
             "openBIS Login",
             type="primary",
         )
-        if login_btn and len(token) > 0:
-            st.session_state.obis_token = token
+        if login_btn and (len(token) > 0 or len(username) * len(password)):
+            st.session_state.openbis_token = token
+            st.session_state.openbis_username = username
+            st.session_state.openbis_password = password
             if not st.session_state.logged_in:
-                openbis_login()
+                openbis_login(openbis_url)
             username = check_openbis_login_success()
             if username is not None:
+                user = st.session_state.oBis.get_user(username)
+                first_name = user.firstName
+                last_name = user.lastName
+                full_name = f"{first_name} {last_name}"
+                if full_name is None:
+                    full_name = username
                 st.success(
-                    f"Hello {username}, login to openBIS was successful",
+                    f"Hello {full_name}, login to openBIS was successful",
                     icon="✅",
                 )
-            #with st.spinner(spinner_message):
-            #    find_relevant_locations(username, include_samples)
+            with st.spinner(spinner_message):
+                find_relevant_locations(username, include_samples)
             with st.spinner("Configuring download from Coscine"):
                 configure_download_from_coscine()
-            if st.session_state.logged_in and not st.session_state.is_crc:
+            if st.session_state.logged_in and not st.session_state.s3_upload_allowed:
                 st.session_state.setup_done = True
             placeholder1.empty()
     placeholder2 = st.empty()
 
     # Prompt user to upload credentials needed for upload to Coscine
 
-    if st.session_state.demo_mode and st.session_state.logged_in:
-        if not st.session_state.s3_client:
-            client, bucket, dmscode = get_s3client()
-            st.session_state.s3_client = client
-            st.session_state.s3_bucket_name = bucket
-            st.session_state.obis_dmscode = dmscode
-        response = check_s3()
-        st.session_state.setup_done = True
-    if st.session_state.is_crc and not st.session_state.setup_done:
+    warning_msg = None
+
+    if st.session_state.s3_upload_allowed and not st.session_state.setup_done:
         with placeholder2.form("Form_S3_credentials"):
             st.write("Enter S3 storage credentials (to upload to Coscine)")
+            st.write(
+                "If you are not uploading files, you can click on *Configure S3* without uploading a config file."
+            )
             s3_credentials = st.file_uploader(
                 "Choose a file",
                 accept_multiple_files=False,
-                label_visibility="collapsed",
                 type=["cfg"],
+                help=open("s3_credentials_demo.cfg", "r")
+                .read()
+                .replace("#", "\#")
+                .replace("\n", "  \n"),
             )
             config_btn = st.form_submit_button("Configure S3", type="primary")
             if config_btn:
                 placeholder1.empty()
                 placeholder2.empty()
                 if not st.session_state.s3_client:
-                    client, bucket, dmscode = get_s3client(s3_credentials)
+                    if s3_credentials:
+                        client, bucket, dmscode = get_s3client(
+                            s3_credentials, from_path=False
+                        )
+                    else:
+                        dmscode = next(iter(st.session_state.s3_clients))
+                        client = st.session_state.s3_clients[dmscode]
+                        bucket = st.session_state.s3_bucket_names[dmscode]
                     st.session_state.s3_client = client
                     st.session_state.s3_bucket_name = bucket
                     st.session_state.obis_dmscode = dmscode
-                response = check_s3()
+                # Sanity checks on the upload client
+                check_read_s3()
+                warning_msg = check_write_s3()
                 st.session_state.setup_done = True
     if st.session_state.setup_done:
         placeholder1.empty()
@@ -547,11 +614,28 @@ def main():
                 f"S3 storage **{dms_code}** found, bucket name: **{bucket}**",
                 icon="✅",
             )
+            if warning_msg is not None:
+                st.warning(warning_msg)
         st.write("Logged into openBIS: ", st.session_state.logged_in)
         st.write("openBIS Upload OK: ", st.session_state.openbis_upload_allowed)
         st.write("Coscine Upload OK: ", st.session_state.s3_upload_ok)
         st.write("Coscine Download OK: ", st.session_state.s3_download_ok)
         st.write("You can now either upload (link) or download (show) data !")
+
+        if len(st.session_state.bucket_fill_levels):
+            st.sidebar.header("S3 Buckets")
+            buckets = list(st.session_state.bucket_fill_levels.items())
+            num_columns = 2
+            columns = st.sidebar.columns(num_columns)
+
+            for index, (bucket_name, fill_level) in enumerate(buckets):
+                col_index = index % num_columns
+                with columns[col_index]:
+                    st.text(bucket_name)
+                    st.progress(fill_level / 100)
+
+                if col_index == num_columns - 1:
+                    columns = st.sidebar.columns(num_columns)
 
 
 if __name__ == "__main__":
