@@ -275,9 +275,6 @@ def configure_download_from_coscine():
     CFG_EXP_LIST = [
         "/CRC1394/CRC1394_COSCINE/CRC1394_COSCINE_CONFIG",
         "/TRR188/TRR188_COSCINE/TRR188_COSCINE_CONFIG",
-        "/IMM_SPACE/IMM_COSCINE/FUNBLOCKS_COSCINE_CONFIG",
-        "/IMM_SPACE/IMM_COSCINE/SILA_COSCINE_CONFIG",
-        "/PUBLICATIONS/PUBLIC_REPOSITORIES/PUBLICATIONS_COLLECTION",
     ]
 
     st.session_state.s3_download_ok = False
@@ -556,8 +553,8 @@ def main():
                     f"Hello {full_name}, login to openBIS was successful",
                     icon="✅",
                 )
-            with st.spinner(spinner_message):
-                find_relevant_locations(username, include_samples)
+            #with st.spinner(spinner_message):
+            #    find_relevant_locations(username, include_samples)
             with st.spinner("Configuring download from Coscine"):
                 configure_download_from_coscine()
             if st.session_state.logged_in and not st.session_state.s3_upload_allowed:
