@@ -553,8 +553,8 @@ def main():
                     f"Hello {full_name}, login to openBIS was successful",
                     icon="✅",
                 )
-            #with st.spinner(spinner_message):
-            #    find_relevant_locations(username, include_samples)
+            with st.spinner(spinner_message):
+                find_relevant_locations(username, include_samples)
             with st.spinner("Configuring download from Coscine"):
                 configure_download_from_coscine()
             if st.session_state.logged_in and not st.session_state.s3_upload_allowed:
