@@ -32,6 +32,7 @@ from configparser import ConfigParser
 from io import StringIO
 import boto3
 from botocore.errorfactory import ClientError
+from botocore.client import Config
 from pybis_tools import check_role, get_full_identifier
 
 OPENBIS_URL = "https://openbis.imm.rwth-aachen.de/openbis/webapp/eln-lims/:8443"
@@ -315,11 +316,11 @@ def get_s3client(config_file=None, from_path=False):
                 endpoint_url=f"{COSCINE_URL}:{COSCINE_PORT}",
                 aws_access_key_id=st.secrets["s3_access_key"],
                 aws_secret_access_key=st.secrets["s3_access_secret"],
-                config=boto3.session.Config(
+                config=Config(
                     signature_version="s3v4",
                     s3={"addressing_style": "virtual"},
-                    connect_timeout=5,
-                    read_timeout=10,
+                    # connect_timeout=5,
+                    # read_timeout=10,
                 ),
             )
             return s3_client, st.secrets["s3_bucket"], "S3_NFDI_DEMO_01"
@@ -350,11 +351,9 @@ def get_s3client(config_file=None, from_path=False):
     s3_client = boto3.client(
         service_name="s3",
         endpoint_url=s3_url,
-        config=boto3.session.Config(
+        config=Config(
             signature_version="s3v4",
-            s3={"addressing_style": "virtual"},
-            connect_timeout=5,
-            read_timeout=10,
+            s3={"addressing_style": "virtual"}
         ),
         aws_access_key_id=s3_key,
         aws_secret_access_key=s3_secret,
