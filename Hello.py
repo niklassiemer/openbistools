@@ -354,7 +354,7 @@ def get_s3client(config_file=None, from_path=False):
         try:
             s3_client = boto3.client(
                 service_name="s3",
-                endpoint_url=f"{COSCINE_URL}:{COSCINE_PORT}",
+                endpoint_url=f"{COSCINE_URL}",
                 aws_access_key_id=st.secrets["s3_access_key"],
                 aws_secret_access_key=st.secrets["s3_access_secret"],
                 config=boto3.session.Config(
