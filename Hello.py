@@ -48,6 +48,7 @@ FORBIDDEN_DATASET_TYPES = [
     "ELN_PREVIEW",  # From OpenBIS
     "SEQ_FILE",  # From OpenBIS
     "MICROSCOPY_IMG_CONTAINER",  # From OpenBIS
+    "SE",  # Custom but no longer used
 ]
 
 # Define Object types to include when uploading using this tool
@@ -79,7 +80,7 @@ warnings.filterwarnings(action="ignore", category=FutureWarning)
 ## ============================================================================
 
 
-def init_session_state(temp_dir: str):
+def init_session_state(temp_dir: str, demo_mode=False):
     # Initialize Streamlit Session State
 
     SESSION_DEFAULTS = {
@@ -114,6 +115,7 @@ def init_session_state(temp_dir: str):
             setattr(st.session_state, k, v)
     st.session_state.temp_dir = temp_dir
     st.session_state.max_size = st_config.get_option("server.maxUploadSize")  # Mb
+    st.session_state.demo_mode = demo_mode
 
 
 def openbis_login(openbis_url):
@@ -331,7 +333,7 @@ def check_openbis_login_success():
 ##
 
 
-def get_s3client(config_file, from_path=False):
+def get_s3client(config_file=None, from_path=False):
     """Read in the config file and parse the configuration settings.
 
     Args:
@@ -350,7 +352,23 @@ def get_s3client(config_file, from_path=False):
         },
     )
 
-    if from_path:
+    if config_file is None:
+        try:
+            s3_client = boto3.client(
+                service_name="s3",
+                endpoint_url=f"{COSCINE_URL}:{COSCINE_PORT}",
+                aws_access_key_id=st.secrets["s3_access_key"],
+                aws_secret_access_key=st.secrets["s3_access_secret"],
+                config=boto3.session.Config(
+                    signature_version="s3v4",
+                    connect_timeout=5,
+                    read_timeout=10,
+                ),
+            )
+            return s3_client, st.secrets["s3_bucket"], "S3_NFDI_DEMO_01"
+        except FileNotFoundError:
+            return None, "", ""
+    elif from_path:
         # Open file to access content
 
         with open(config_file, "r") as fh:
@@ -451,7 +469,14 @@ def main():
         "--coscine_url", type=str, required=False, help="Default Coscine endpoint"
     )
     args = parser.parse_args()
-    init_session_state(temp_dir=args.temp_dir)
+        
+    demo_mode = args.demo_mode
+    if not demo_mode:
+        if "DEMO_MODE" in st.secrets:
+            demo_mode = st.secrets["DEMO_MODE"]
+        else:
+            demo_mode = os.environ.get("DEMO_MODE", "False").lower() == 'true'
+    init_session_state(temp_dir=args.temp_dir, demo_mode=demo_mode)
 
     # Assign which openBIS instance you want to communicate with
 
@@ -464,7 +489,7 @@ def main():
     # Page Config
 
     st.set_page_config(
-        page_title="openBIS Companion App - CRC1394",
+        page_title="Web Tool to link and upload data to openBIS",
         page_icon="media/SFB1394_icon.jpg",
         layout="wide",
     )
@@ -483,7 +508,7 @@ def main():
         os.makedirs(st.session_state.temp_dir)
     # Display Welcome section
 
-    st.title("SFB/CRC 1394 openBIS Companion App")
+    st.title("SFB/CRC 1394 openBIS Linked Files")
     st.image("media/SFB1394_TitleImage_Cropped.png")
     st.markdown(
         """
@@ -503,24 +528,12 @@ def main():
     # Prompt user to login to opemBIS
 
     with placeholder1.form("form-openbis-login"):
-        st.write(
-            "You can use the session token from the openBIS ELN-LIMS GUI to login to the companion app or your username and password."
+        st.write("Enter openBIS session token")
+        token = st.text_input(
+            "Enter your openBIS session token",
+            label_visibility="collapsed",
+            placeholder="Go to /Utilities /User Profile",
         )
-        col1, col2, col3 = st.columns([0.5, 0.25, 0.25])
-        with col1:
-            token = st.text_input(
-                "Enter your openBIS session token",
-                placeholder="Go to /Utilities /User Profile",
-            )
-        with col2:
-            username = st.text_input(
-                "Enter your openBIS username",
-            )
-        with col3:
-            password = st.text_input(
-                "Enter your openBIS password",
-                type="password",
-            )
         include_samples = st.toggle(
             "Are you uploading data to samples?",
             help="Only relevant for users uploading simulation data. Experimental data should be uploaded to experiments.",
@@ -535,10 +548,8 @@ def main():
             "openBIS Login",
             type="primary",
         )
-        if login_btn and (len(token) > 0 or len(username) * len(password)):
+        if login_btn and len(token) > 0:
             st.session_state.openbis_token = token
-            st.session_state.openbis_username = username
-            st.session_state.openbis_password = password
             if not st.session_state.logged_in:
                 openbis_login(openbis_url)
             username = check_openbis_login_success()
@@ -570,7 +581,7 @@ def main():
         with placeholder2.form("Form_S3_credentials"):
             st.write("Enter S3 storage credentials (to upload to Coscine)")
             st.write(
-                "If you are not uploading files, you can click on *Configure S3* without uploading a config file."
+                "If you want to use the demo mode, you can click on *Configure S3* without uploading a config file."
             )
             s3_credentials = st.file_uploader(
                 "Choose a file",
@@ -591,9 +602,7 @@ def main():
                             s3_credentials, from_path=False
                         )
                     else:
-                        dmscode = next(iter(st.session_state.s3_clients))
-                        client = st.session_state.s3_clients[dmscode]
-                        bucket = st.session_state.s3_bucket_names[dmscode]
+                        client, bucket, dmscode = get_s3client()
                     st.session_state.s3_client = client
                     st.session_state.s3_bucket_name = bucket
                     st.session_state.obis_dmscode = dmscode
