@@ -526,8 +526,8 @@ def upload_data(
 
 
 def get_full_identifier(
-    pybis_experiment_or_collection: Experiment,
-    pybis_object: Sample,
+    exp_dict: dict,
+    obj_dict: dict,
     sep: str = "//",
     include_permid_suffix: bool = False, 
 ):
@@ -540,38 +540,38 @@ def get_full_identifier(
         /SPACE/PROJECT/EXPERIMENT
         /SPACE/PROJECT/EXPERIMENT/OBJECT
     """
-
-    project_code = pybis_experiment_or_collection.project.code
-    experiment_or_collection_code = pybis_experiment_or_collection.code
-    object_code = pybis_object.code
+    
+    space_code = exp_dict["space"]
+    project_code = exp_dict["project"]
+    experiment_or_collection_code = exp_dict["code"]
+    object_code = obj_dict["code"]
+    object_permid = obj_dict["permId"]
 
     # Fetch names for display purposes
 
-    experiment_or_collection_name = pybis_experiment_or_collection.p.get("$name")
-    object_name = pybis_object.p.get("$name")
+    experiment_or_collection_name = exp_dict.get("$NAME")
+    object_name = obj_dict.get("$NAME")
 
     # Create name from code if necessary
 
     if experiment_or_collection_name is None:
-        parts = pybis_experiment_or_collection.code.split("_")
+        parts = experiment_or_collection_code.split("_")
         parts = [part.title() for part in parts]
         experiment_or_collection_name = " ".join(parts)
 
     if object_name is None:
-        object_name = pybis_object.code
+        object_name = object_code
     
     # Create full identifier
 
-    object_identifier = pybis_object.identifier
+    object_identifier = obj_dict["identifier"]
     new_ending = f"{experiment_or_collection_code}/{object_code}"
     full_identifier = object_identifier.replace(object_code, new_ending)
-
-    # We drop the space for the display name
     
-    display_name = sep.join([project_code, experiment_or_collection_name, object_name])
+    # Create display name with custom seperator
+    display_name = sep.join([space_code, project_code, experiment_or_collection_name, object_name])
     if include_permid_suffix:
-        if pybis_object is not None:
-            display_name += " (%s) " % pybis_object.permId
+        display_name += f" ({object_permid})" 
 
     return full_identifier, display_name
 
