@@ -382,6 +382,25 @@ def check_s3():
         if response["Name"] == st.session_state.s3_bucket_name:
             st.session_state.s3_upload_ok = True
             return True
+def check_write_s3():
+    object_key = "test-file.txt"
+    data = "This is a test."
+    try:
+        response_put = st.session_state.s3_client.put_object(
+            Bucket=st.session_state.s3_bucket_name,
+            Key=object_key,
+            Body=data,
+        )
+        response_delete = st.session_state.s3_client.delete_object(
+            Bucket=st.session_state.s3_bucket_name,
+            Key=object_key,
+        )
+    except ClientError as e:
+        access_key = st.session_state.s3_client._request_signer._credentials.access_key
+        warning_msg = (
+            f"You might not be able to upload to Coscine using access key {access_key}"
+        )
+        return warning_msg
 
 
 ## ============================================================================
@@ -424,7 +443,7 @@ def main():
     # Clean up temporary directory
     if os.path.isdir(st.session_state.temp_dir):
         for file in os.scandir(st.session_state.temp_dir):
-            if file.is_file:
+            if file.is_file():
                 os.unlink(file.path)
     else:
         os.makedirs(st.session_state.temp_dir)
