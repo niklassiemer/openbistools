@@ -468,6 +468,7 @@ def main():
         "--coscine_url", type=str, required=False, help="Default Coscine endpoint"
     )
     args = parser.parse_args()
+    init_session_state(temp_dir=args.temp_dir)
         
     # Assign which openBIS instance you want to communicate with
 
