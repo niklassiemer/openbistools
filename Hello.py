@@ -80,7 +80,7 @@ warnings.filterwarnings(action="ignore", category=FutureWarning)
 ## ============================================================================
 
 
-def init_session_state(temp_dir: str, demo_mode=False):
+def init_session_state(temp_dir: str):
     # Initialize Streamlit Session State
 
     SESSION_DEFAULTS = {
@@ -115,7 +115,6 @@ def init_session_state(temp_dir: str, demo_mode=False):
             setattr(st.session_state, k, v)
     st.session_state.temp_dir = temp_dir
     st.session_state.max_size = st_config.get_option("server.maxUploadSize")  # Mb
-    st.session_state.demo_mode = demo_mode
 
 
 def openbis_login(openbis_url):
@@ -470,14 +469,6 @@ def main():
     )
     args = parser.parse_args()
         
-    demo_mode = args.demo_mode
-    if not demo_mode:
-        if "DEMO_MODE" in st.secrets:
-            demo_mode = st.secrets["DEMO_MODE"]
-        else:
-            demo_mode = os.environ.get("DEMO_MODE", "False").lower() == 'true'
-    init_session_state(temp_dir=args.temp_dir, demo_mode=demo_mode)
-
     # Assign which openBIS instance you want to communicate with
 
     openbis_url = args.openbis_url
