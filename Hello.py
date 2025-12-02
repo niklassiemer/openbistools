@@ -350,6 +350,12 @@ def get_s3client(config_file=None, from_path=False):
     s3_client = boto3.client(
         service_name="s3",
         endpoint_url=s3_url,
+        config=boto3.session.Config(
+            signature_version="s3v4",
+            s3={"addressing_style": "virtual"},
+            connect_timeout=5,
+            read_timeout=10,
+        ),
         aws_access_key_id=s3_key,
         aws_secret_access_key=s3_secret,
     )
