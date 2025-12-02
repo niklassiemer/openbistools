@@ -35,8 +35,8 @@ from botocore.errorfactory import ClientError
 from pybis_tools import check_role, get_full_identifier
 
 OPENBIS_URL = "https://openbis.imm.rwth-aachen.de/openbis/webapp/eln-lims/:8443"
-COSCINE_URL = "https://coscine-s3-01.s3.fds.rwth-aachen.de"
-COSCINE_PORT = "9021"
+COSCINE_URL = "https://global.datastorage.nrw"
+COSCINE_PORT = "443"
 
 # Define DataSet types to ignore in this tool
 
@@ -317,6 +317,7 @@ def get_s3client(config_file=None, from_path=False):
                 aws_secret_access_key=st.secrets["s3_access_secret"],
                 config=boto3.session.Config(
                     signature_version="s3v4",
+                    s3={"addressing_style": "virtual"},
                     connect_timeout=5,
                     read_timeout=10,
                 ),
