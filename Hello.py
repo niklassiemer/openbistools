@@ -39,6 +39,7 @@ from pybis_tools import check_role, get_full_identifier
 OPENBIS_URL = "https://openbis.imm.rwth-aachen.de/openbis/webapp/eln-lims/:8443"
 COSCINE_URL = "https://coscine-s3-01.s3.fds.rwth-aachen.de:9021"  # RWTH-RDS-S3
 # COSCINE_URL = "https://coscine-nrw-s3-01.s3.fds.nrw:9021" # NRW-RDS-S3
+COSCINE_PORT = "443"
 
 
 # Define DataSet types to ignore in this tool
