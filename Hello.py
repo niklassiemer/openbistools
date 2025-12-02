@@ -440,7 +440,7 @@ def check_write_s3():
     except ClientError as e:
         access_key = st.session_state.s3_client._request_signer._credentials.access_key
         warning_msg = (
-            f"You might not be able to upload to Coscine using access key {access_key}"
+            f"You might not be able to upload to Coscine: {e}"
         )
         return warning_msg
 
@@ -608,7 +608,7 @@ def main():
             bucket = st.session_state.s3_bucket_name
             dms_code = st.session_state.obis_dmscode
             st.success(
-                f"S3 storage **{dms_code}** found, bucket name: **{bucket}**",
+                f"S3 storage found and connected.",
                 icon="✅",
             )
             if warning_msg is not None:
